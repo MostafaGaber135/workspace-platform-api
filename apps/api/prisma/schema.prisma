@@ -1,0 +1,90 @@
+// DeveloperOS — Prisma schema (Phase 1 foundation).
+//
+// Scope is intentionally limited to identity and workspace containment:
+// User, Workspace, and WorkspaceMember. Repositories, analysis sessions,
+// suggestions, work logs, exports, and audit entities are introduced in later
+// phases per the Architecture Addendum and are deliberately absent here.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Workspace membership role.
+///
+/// The default is MEMBER: creating a membership without an explicit role must
+/// never grant elevated access. When a workspace owner membership is created,
+/// OWNER is assigned explicitly (Architecture Addendum §1).
+enum Role {
+  OWNER
+  MEMBER
+}
+
+/// An authenticated account. The password hash is stored here; it is never
+/// exposed through any API response type (see shared-types `AuthenticatedUser`).
+///
+/// Email normalization strategy (PRD §12.2, §7.1):
+///  - `email` retains the address exactly as entered (trimmed), for display.
+///  - `normalizedEmail` is the canonical lookup key, derived by every create and
+///    lookup path via `normalizeEmail()` (`email.trim().toLowerCase()`) in
+///    `@developeros/validation`.
+/// Case-insensitive uniqueness is enforced by the `@unique` constraint on
+/// `normalizedEmail`. This deliberately avoids a functional `lower(email)` index
+/// so the Prisma schema and migrations stay fully aligned with NO intentional
+/// drift.
+model User {
+  id              String   @id @default(cuid())
+  email           String
+  normalizedEmail String   @unique
+  passwordHash    String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  /// Workspaces this user owns.
+  ownedWorkspaces  Workspace[]       @relation("WorkspaceOwner")
+  /// Membership rows linking this user into workspaces.
+  workspaceMembers WorkspaceMember[]
+
+  @@map("users")
+}
+
+/// Top-level isolation boundary. Every downstream resource (added in later
+/// phases) is scoped to exactly one workspace. A workspace name must be unique
+/// per owner (PRD): the same user cannot create two workspaces with the same
+/// name, while different users may.
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner   User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members WorkspaceMember[]
+
+  @@unique([ownerId, name])
+  @@map("workspaces")
+}
+
+/// Explicit join entity between User and Workspace carrying the membership
+/// role. A user may belong to a workspace at most once, enforced by the unique
+/// composite constraint. `role` defaults to MEMBER; OWNER is assigned explicitly.
+model WorkspaceMember {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        Role     @default(MEMBER)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@index([workspaceId])
+  @@map("workspace_members")
+}
