@@ -1,4 +1,4 @@
-import { normalizeEmail } from '@developeros/validation';
+import { normalizeEmail, normalizeWorkspaceName } from '@developeros/validation';
 import { PrismaService } from '../src/prisma/prisma.service';
 
 /**
@@ -77,14 +77,30 @@ describe('Database integration (PostgreSQL)', () => {
     const ownerB = await prisma.user.create({ data: makeUser('owner-b') });
     createdUserIds.push(ownerA.id, ownerB.id);
 
-    await prisma.workspace.create({ data: { name: 'Shared Name', ownerId: ownerA.id } });
+    await prisma.workspace.create({
+      data: {
+        name: 'Shared Name',
+        normalizedName: normalizeWorkspaceName('Shared Name'),
+        ownerId: ownerA.id,
+      },
+    });
 
     await expect(
-      prisma.workspace.create({ data: { name: 'Shared Name', ownerId: ownerA.id } }),
+      prisma.workspace.create({
+        data: {
+          name: 'Shared Name',
+          normalizedName: normalizeWorkspaceName('Shared Name'),
+          ownerId: ownerA.id,
+        },
+      }),
     ).rejects.toMatchObject({ code: 'P2002' });
 
     const otherOwnerWorkspace = await prisma.workspace.create({
-      data: { name: 'Shared Name', ownerId: ownerB.id },
+      data: {
+        name: 'Shared Name',
+        normalizedName: normalizeWorkspaceName('Shared Name'),
+        ownerId: ownerB.id,
+      },
     });
     expect(otherOwnerWorkspace.id).toBeDefined();
   });
@@ -94,7 +110,11 @@ describe('Database integration (PostgreSQL)', () => {
     const other = await prisma.user.create({ data: makeUser('member-other') });
     createdUserIds.push(owner.id, other.id);
     const workspace = await prisma.workspace.create({
-      data: { name: 'Membership WS', ownerId: owner.id },
+      data: {
+        name: 'Membership WS',
+        normalizedName: normalizeWorkspaceName('Membership WS'),
+        ownerId: owner.id,
+      },
     });
 
     // Created without an explicit role -> must NOT be elevated.

@@ -1,9 +1,11 @@
-// DeveloperOS — Prisma schema (Phase 1 foundation).
+// DeveloperOS — Prisma schema.
 //
-// Scope is intentionally limited to identity and workspace containment:
-// User, Workspace, and WorkspaceMember. Repositories, analysis sessions,
-// suggestions, work logs, exports, and audit entities are introduced in later
-// phases per the Architecture Addendum and are deliberately absent here.
+// Phase 1 established identity and workspace containment (User, Workspace,
+// WorkspaceMember). Phase 2 · Sprint 2 · Epic 1 adds the Workspace vertical
+// slice: case-insensitive per-owner name uniqueness via `normalizedName`, and a
+// minimal append-only AuditLog for workspace create/rename. Repositories,
+// analysis sessions, suggestions, work logs, exports, Git, and AI remain out of
+// scope.
 
 generator client {
   provider = "prisma-client-js"
@@ -22,6 +24,13 @@ datasource db {
 enum Role {
   OWNER
   MEMBER
+}
+
+/// Auditable workspace actions recorded in {@link AuditLog}. Kept intentionally
+/// small for this epic — only workspace create and rename are audited.
+enum AuditAction {
+  WORKSPACE_CREATED
+  WORKSPACE_RENAMED
 }
 
 /// An authenticated account. The password hash is stored here; it is never
@@ -48,25 +57,34 @@ model User {
   ownedWorkspaces  Workspace[]       @relation("WorkspaceOwner")
   /// Membership rows linking this user into workspaces.
   workspaceMembers WorkspaceMember[]
+  /// Audit records for which this user was the actor (append-only).
+  auditLogs        AuditLog[]
 
   @@map("users")
 }
 
 /// Top-level isolation boundary. Every downstream resource (added in later
-/// phases) is scoped to exactly one workspace. A workspace name must be unique
-/// per owner (PRD): the same user cannot create two workspaces with the same
-/// name, while different users may.
+/// phases) is scoped to exactly one workspace.
+///
+/// Name uniqueness is per owner and CASE-INSENSITIVE: `name` retains the
+/// user-facing trimmed value, while `normalizedName` (`name.trim().toLowerCase()`,
+/// derived via `normalizeWorkspaceName()` in `@developeros/validation`) is the
+/// canonical key. The `@@unique([ownerId, normalizedName])` constraint enforces
+/// it with a plain composite index — no functional index, no schema drift.
+/// `normalizedName` is internal and is never returned in API responses.
 model Workspace {
-  id        String   @id @default(cuid())
-  name      String
-  ownerId   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(cuid())
+  name           String
+  normalizedName String
+  ownerId        String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  owner   User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  members WorkspaceMember[]
+  owner     User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members   WorkspaceMember[]
+  auditLogs AuditLog[]
 
-  @@unique([ownerId, name])
+  @@unique([ownerId, normalizedName])
   @@map("workspaces")
 }
 
@@ -87,4 +105,31 @@ model WorkspaceMember {
   @@index([userId])
   @@index([workspaceId])
   @@map("workspace_members")
+}
+
+/// Append-only audit trail for workspace mutations.
+///
+/// Records are immutable and must survive future user/workspace deletion, so the
+/// relations use `onDelete: Restrict` (NOT Cascade) until a formal deletion
+/// policy is designed. Snapshots use explicit, non-sensitive fields only:
+///  - WORKSPACE_CREATED: beforeSnapshot = null, afterSnapshot = created workspace
+///    (approved public fields only — never `normalizedName`, secrets, headers,
+///    or tokens).
+///  - WORKSPACE_RENAMED: beforeSnapshot = { name: <previous> },
+///    afterSnapshot = { name: <new> }.
+model AuditLog {
+  id             String      @id @default(cuid())
+  action         AuditAction
+  workspaceId    String
+  actorId        String
+  beforeSnapshot Json?
+  afterSnapshot  Json?
+  createdAt      DateTime    @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  actor     User      @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId])
+  @@index([actorId])
+  @@map("audit_logs")
 }

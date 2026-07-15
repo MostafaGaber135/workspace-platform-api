@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Placeholder secrets so environment validation passes in CI.
-  # These are not production credentials.
+  # Placeholder secrets so environment validation passes in CI. Not real
+  # credentials; they never touch a production system. The two must differ.
   JWT_ACCESS_SECRET: ci-access-secret-ci-access-secret-000001
   JWT_REFRESH_SECRET: ci-refresh-secret-ci-refresh-secret-00001
 
@@ -20,83 +20,54 @@ jobs:
   quality:
     name: Format, typecheck, lint, unit tests, build
     runs-on: ubuntu-latest
-
-    env:
-      # Prisma validate/generate require DATABASE_URL to exist,
-      # but this job does not connect to PostgreSQL.
-      DATABASE_URL: postgresql://developeros:developeros@localhost:5432/developeros_test
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Enable corepack (pnpm)
         run: corepack enable
-
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: pnpm
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
       - name: Generate Prisma client
         run: pnpm --filter @developeros/api exec prisma generate
-
       - name: Validate Prisma schema
         run: pnpm --filter @developeros/api run prisma:validate
-
       - name: Format check
         run: pnpm format:check
-
       - name: Typecheck
         run: pnpm typecheck
-
       - name: Lint
         run: pnpm lint
-
       - name: Unit tests
         run: pnpm test
-
       - name: Build
         run: pnpm build
 
   api-liveness-e2e:
     name: API liveness e2e (database-independent)
     runs-on: ubuntu-latest
-
-    env:
-      # The API validates DATABASE_URL at startup, but /health/live
-      # must work even when PostgreSQL is unavailable.
-      DATABASE_URL: postgresql://developeros:developeros@localhost:5432/developeros_test
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Enable corepack (pnpm)
         run: corepack enable
-
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: pnpm
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
       - name: Generate Prisma client
         run: pnpm --filter @developeros/api exec prisma generate
-
       - name: Build workspace packages
         run: pnpm --filter "./packages/*" build
-
       - name: Run API liveness e2e
         run: pnpm --filter @developeros/api test:e2e
 
   api-integration:
     name: API database integration (PostgreSQL)
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: postgres:16-alpine
@@ -111,68 +82,52 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-
     env:
       DATABASE_URL: postgresql://developeros:developeros@localhost:5432/developeros_test
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Enable corepack (pnpm)
         run: corepack enable
-
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: pnpm
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
       - name: Generate Prisma client
         run: pnpm --filter @developeros/api exec prisma generate
-
       - name: Build workspace packages
         run: pnpm --filter "./packages/*" build
-
-      - name: Apply migrations
+      - name: Apply migrations (prisma migrate deploy)
         run: pnpm --filter @developeros/api run prisma:deploy
-
       - name: Run database integration tests
         run: pnpm --filter @developeros/api test:integration
 
   web-e2e:
     name: Web E2E (API + web running)
     runs-on: ubuntu-latest
-
+    # No PostgreSQL service: the web E2E asserts the liveness path (/health/live),
+    # which is database-independent by design. The API boots without a reachable
+    # database (startup connection is non-fatal); DATABASE_URL only needs to be a
+    # format-valid string for environment validation to pass.
     env:
-      # PostgreSQL is intentionally not started for this job.
-      # The web test verifies /health/live, which is DB-independent.
       DATABASE_URL: postgresql://developeros:developeros@localhost:5432/developeros_test
       NEXT_PUBLIC_API_URL: http://localhost:4000
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Enable corepack (pnpm)
         run: corepack enable
-
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: pnpm
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
       - name: Generate Prisma client
         run: pnpm --filter @developeros/api exec prisma generate
-
-      - name: Build packages, API, and web
+      - name: Build (packages, api, web)
         run: pnpm build
-
-      - name: Install Playwright Chromium
+      - name: Install Playwright browsers
         run: pnpm --filter @developeros/web exec playwright install --with-deps chromium
-
-      - name: Run web E2E
+      - name: Run web E2E (Playwright boots API + web)
         run: pnpm --filter @developeros/web test:e2e
